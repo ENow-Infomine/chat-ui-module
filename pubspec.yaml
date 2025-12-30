@@ -1,0 +1,11 @@
+name: xmpp_chat_module
+description: Reusable XMPP Chat Widget
+version: 0.0.1
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  http: ^1.6.0
+  js: ^0.6.7
