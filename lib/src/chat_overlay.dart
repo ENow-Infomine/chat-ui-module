@@ -255,7 +255,7 @@ class _ChatOverlayState extends State<ChatOverlay> {
                   onTap: () {
                      // Join room on tap
                      _xmpp.joinRoom(r, widget.currentUser);
-                     setState(() { _activeChatId = r; _isGroupMode = true; });
+                     setState(() { _history[r] = []; _activeChatId = r; _isGroupMode = true; });
                   },
                 )),
               ],
@@ -278,8 +278,9 @@ class _ChatOverlayState extends State<ChatOverlay> {
                       shape: BoxShape.circle
                     ),
                   ),
-                  onTap: () => setState(() { _activeChatId = u; _isGroupMode = false; }),
+                  onTap: () => setState(() { _history[u] = []; _activeChatId = u; _isGroupMode = false; }),
                 )),
+
               ],
             ],
           ),
