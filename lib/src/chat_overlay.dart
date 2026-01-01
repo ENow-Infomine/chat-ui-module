@@ -278,7 +278,7 @@ class _ChatOverlayState extends State<ChatOverlay> {
                       shape: BoxShape.circle
                     ),
                   ),
-                  onTap: () => setState(() { _history[u] = []; _activeChatId = u; _isGroupMode = false; }),
+                  onTap: () => setState(() {  _activeChatId = u; _isGroupMode = false; }),
                 )),
 
               ],
