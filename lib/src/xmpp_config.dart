@@ -3,17 +3,28 @@ class XmppConfig {
   factory XmppConfig() => _instance;
   XmppConfig._internal();
 
-  String wsUrl = "ws://localhost:5280/ws";
-  String domain = "localhost";
-  String restApiUrl = "http://localhost:8080/api"; // NEW
+  // 1. Define Defaults here. These are effective immediately if init() is never called.
+  String wsUrl = "wss://srv1138210.hstgr.cloud/ws";
+  String domain = "srv1138210.hstgr.cloud";
+  String restApiUrl = "https://srv1138210.hstgr.cloud/api/chat"; 
 
+  // 2. Make parameters optional (nullable)
   void init({
-    required String openfireWebSocketUrl, 
-    required String openfireDomain,
-    required String backendRestUrl // NEW param
+    String? openfireWebSocketUrl, 
+    String? openfireDomain,
+    String? backendRestUrl
   }) {
-    wsUrl = openfireWebSocketUrl;
-    domain = openfireDomain;
-    restApiUrl = backendRestUrl;
+    // 3. Only override the default if the client actually provided a new value
+    if (openfireWebSocketUrl != null) {
+      wsUrl = openfireWebSocketUrl;
+    }
+    
+    if (openfireDomain != null) {
+      domain = openfireDomain;
+    }
+    
+    if (backendRestUrl != null) {
+      restApiUrl = backendRestUrl;
+    }
   }
 }
