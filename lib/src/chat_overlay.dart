@@ -187,7 +187,7 @@ class _ChatOverlayState extends State<ChatOverlay> {
 
   // --- WIDGETS ---
 
-  Widget _buildHeader() {
+/*   Widget _buildHeader() {
     String title = _activeChatId!;
     String subtitle = "";
     Color statusColor = Colors.grey;
@@ -237,7 +237,7 @@ class _ChatOverlayState extends State<ChatOverlay> {
         )
       ]),
     );
-  }
+  } */
 
   Widget _buildInbox() {
     if (_isLoadingInbox) return Center(child: CircularProgressIndicator());
@@ -312,7 +312,7 @@ class _ChatOverlayState extends State<ChatOverlay> {
     );
   }
 
-  Widget _buildChat() {
+/*   Widget _buildChat() {
     return Column(
       children: [
         _buildHeader(),
@@ -351,7 +351,151 @@ class _ChatOverlayState extends State<ChatOverlay> {
         )
       ],
     );
-  }
+  } */
+
+Widget _buildChat() {
+  return Column(
+    children: [
+      // 1. THE HEADER (Includes Back & Close Buttons)
+      Container(
+        padding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+        color: Colors.blue[800], // Match your app theme
+        child: Row(
+          children: [
+            // Back to Inbox
+            IconButton(
+              icon: Icon(Icons.arrow_back, color: Colors.white, size: 20),
+              onPressed: () => setState(() => _activeChatId = null),
+              padding: EdgeInsets.zero,
+              constraints: BoxConstraints(), // Minimizes padding
+            ),
+            SizedBox(width: 10),
+            
+            // Title Area
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    _activeChatId ?? "Chat",
+                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  // Optional: Show status or topic
+                  Text(
+                    "SystemBot, User...",
+                    style: TextStyle(color: Colors.white70, fontSize: 10),
+                    overflow: TextOverflow.ellipsis,
+                  )
+                ],
+              ),
+            ),
+            
+            // Close / Minimize Button (The Fix for the collision)
+            IconButton(
+              icon: Icon(Icons.close, color: Colors.white, size: 20),
+              onPressed: _toggleChat, // Closes the overlay entirely
+              padding: EdgeInsets.zero,
+              constraints: BoxConstraints(),
+            ),
+          ],
+        ),
+      ),
+
+      // 2. MESSAGE LIST
+      Expanded(
+        child: Container(
+          color: Colors.grey[100], // Light background for chat area
+          child: ListView.builder(
+            padding: EdgeInsets.all(12),
+            // Auto-scroll to bottom usually requires a ScrollController, 
+            // but for now, reverse: true is a quick hack if you reverse the list order.
+            // Keeping it standard for this example:
+            itemCount: (_history[_activeChatId!] ?? []).length,
+            itemBuilder: (ctx, i) {
+              String msg = _history[_activeChatId!]![i];
+              bool isMe = msg.startsWith("Me:");
+              
+              // Remove "Me:" or "User:" prefix for display cleanliness
+              String displayMsg = msg.contains(":") ? msg.substring(msg.indexOf(":") + 1).trim() : msg;
+
+              return Align(
+                alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
+                child: Container(
+                  margin: EdgeInsets.symmetric(vertical: 4),
+                  padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: isMe ? Colors.blue[100] : Colors.white,
+                    borderRadius: BorderRadius.only(
+                      topLeft: Radius.circular(12),
+                      topRight: Radius.circular(12),
+                      bottomLeft: isMe ? Radius.circular(12) : Radius.circular(0),
+                      bottomRight: isMe ? Radius.circular(0) : Radius.circular(12),
+                    ),
+                    boxShadow: [
+                      BoxShadow(color: Colors.black12, blurRadius: 2, offset: Offset(0, 1))
+                    ],
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      if (!isMe) // Show sender name if it's not me
+                        Text(
+                          msg.split(":")[0], 
+                          style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.grey[600])
+                        ),
+                      Text(displayMsg, style: TextStyle(fontSize: 13)),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+      ),
+
+      // 3. INPUT AREA
+      Container(
+        decoration: BoxDecoration(
+          color: Colors.white,
+          border: Border(top: BorderSide(color: Colors.grey[300]!)),
+        ),
+        padding: EdgeInsets.all(8.0),
+        child: Row(
+          children: [
+            Expanded(
+              child: TextField(
+                controller: _ctrl,
+                onSubmitted: (_) => _send(),
+                decoration: InputDecoration(
+                  hintText: "Type a message...",
+                  contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(20),
+                    borderSide: BorderSide(color: Colors.grey[300]!),
+                  ),
+                  isDense: true, // Makes it more compact
+                  fillColor: Colors.grey[50],
+                  filled: true,
+                ),
+              ),
+            ),
+            SizedBox(width: 8),
+            CircleAvatar(
+              backgroundColor: Colors.blue[800],
+              radius: 18,
+              child: IconButton(
+                icon: Icon(Icons.send, color: Colors.white, size: 16),
+                onPressed: _send,
+                padding: EdgeInsets.zero,
+              ),
+            )
+          ],
+        ),
+      )
+    ],
+  );
+}
 
   @override
   Widget build(BuildContext context) {
