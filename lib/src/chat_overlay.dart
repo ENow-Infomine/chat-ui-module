@@ -1,13 +1,13 @@
 import 'package:flutter/material.dart';
 import 'dart:html' as html;
-import 'dart:js' as js; // Required for window.focus()
+import 'dart:js' as js; 
 import 'xmpp_service.dart';
-import 'backend_service.dart'; // Internal Service
+import 'backend_service.dart'; 
 
 class ChatOverlay extends StatefulWidget {
   final String currentUser;
   final String currentPass;
-  final Widget child; // The Main App content
+  final Widget child; 
 
   const ChatOverlay({
     Key? key,
@@ -30,73 +30,57 @@ class _ChatOverlayState extends State<ChatOverlay> {
   String? _activeChatId; // Null = Inbox, Value = Room/User ID
   bool _isGroupMode = true;
 
-  // --- Data State (Fetched Internally) ---
+  // --- Data State ---
   List<String> _myRooms = [];
   List<String> _myColleagues = [];
   bool _isLoadingInbox = true;
-    int _unreadCount = 0;
-
+  int _unreadCount = 0;
 
   // --- Chat Data ---
   final Map<String, List<String>> _history = {};
-  final Map<String, Set<String>> _presenceMap = {}; // Tracks online users
+  final Map<String, Set<String>> _presenceMap = {}; 
   final TextEditingController _ctrl = TextEditingController();
 
   @override
   void initState() {
     super.initState();
     
-    // 1. Request Notification Permissions
     if (html.Notification.permission != 'granted') {
       html.Notification.requestPermission();
     }
 
-    // 2. Fetch Inbox Data from Backend
     _loadInbox();
 
-    // 3. Initialize XMPP Service
     _xmpp = XmppService(
       onConnected: () {
         if (mounted) setState(() => _isConnected = true);
       },
       onMessage: (from, body, type) {
-        // --- SENDER PARSING LOGIC ---
-        String chatKey = from.split('@')[0]; // The ID (room or user)
+        String chatKey = from.split('@')[0];
         String sender;
 
-        // 1. SILENT CONTROL SIGNAL (from Backend)
         if (type == 'headline') {
           if (body == 'REFRESH_INBOX') {
-            print("System Signal: Refreshing Inbox...");
-            _loadInbox(); // Fetch new tickets from API
-            
-            // Show badge if chat is closed
-            if (!_isOpen) {
-              if (mounted) setState(() => _unreadCount++);
-            }
+            _loadInbox(); 
+            if (!_isOpen && mounted) setState(() => _unreadCount++);
           }
-          return; // <--- EXIT: Do not add to chat history!
+          return; 
         } 
         else if (type == 'groupchat') {
-           // Room messages: room@conf/Nick
            chatKey = from.split('@')[0];
            sender = from.contains('/') ? from.split('/')[1] : "System";
         } 
         else {
-           // DM: user@domain/Resource
            chatKey = from.split('@')[0];
-           sender = chatKey; // In DM, sender is the user ID
+           sender = chatKey; 
         }
 
-        // --- BACKGROUND NOTIFICATION ---
         if (html.document.visibilityState == 'hidden') {
            if (html.Notification.permission == 'granted') {
               var n = html.Notification("Msg from $sender", body: body);
               n.onClick.listen((e) { 
-                // JS Focus Fix
                 js.context.callMethod('focus'); 
                 n.close();
-                // Navigate to chat
                 if (mounted) {
                   setState(() { _isOpen = true; _activeChatId = chatKey; });
                 }
@@ -104,10 +88,8 @@ class _ChatOverlayState extends State<ChatOverlay> {
            }
         }
 
-        // --- UPDATE HISTORY ---
         if (mounted) {
           setState(() {
-            // Handle Unread Badge for Chat Messages
             if (!_isOpen) _unreadCount++;            
             if (!_history.containsKey(chatKey)) _history[chatKey] = [];
             _history[chatKey]!.add("$sender: $body");
@@ -116,7 +98,6 @@ class _ChatOverlayState extends State<ChatOverlay> {
       },
     );
 
-    // 4. Presence Listener
     _xmpp.presenceStream.listen((event) {
       if (!mounted) return;
       String from = event['from']!; 
@@ -124,7 +105,6 @@ class _ChatOverlayState extends State<ChatOverlay> {
       
       setState(() {
         if (from.contains('/')) {
-          // Group Presence (ticket_100@conf/Alice)
           String room = from.split('@')[0];
           String nick = from.split('/')[1];
           if (!_presenceMap.containsKey(room)) _presenceMap[room] = {};
@@ -132,7 +112,6 @@ class _ChatOverlayState extends State<ChatOverlay> {
           if (status == 'offline') _presenceMap[room]!.remove(nick);
           else _presenceMap[room]!.add(nick);
         } else {
-          // Direct Presence (bob@domain)
           String user = from.split('@')[0];
           if (!_presenceMap.containsKey(user)) _presenceMap[user] = {};
           
@@ -142,14 +121,11 @@ class _ChatOverlayState extends State<ChatOverlay> {
       });
     });
 
-    // 5. Connect
     _xmpp.connect(widget.currentUser, widget.currentPass);
   }
 
-  // --- INTERNAL FETCHING ---
-  void _loadInbox() async {
+  Future<void> _loadInbox() async {
     setState(() => _isLoadingInbox = true);
-    // Uses the internal BackendService moved to the module
     final data = await BackendService.getInbox(widget.currentUser);
     
     if (mounted) {
@@ -161,13 +137,12 @@ class _ChatOverlayState extends State<ChatOverlay> {
     }
   }
 
-
   void _toggleChat() {
     setState(() {
       _isOpen = !_isOpen;
       if (_isOpen) {
-        _unreadCount = 0; // Clear badge
-        _loadInbox();     // Auto-refresh when opening
+        _unreadCount = 0; 
+        _loadInbox();     
       }
     });
   }
@@ -187,315 +162,227 @@ class _ChatOverlayState extends State<ChatOverlay> {
 
   // --- WIDGETS ---
 
-/*   Widget _buildHeader() {
-    String title = _activeChatId!;
-    String subtitle = "";
-    Color statusColor = Colors.grey;
-
-    if (_isGroupMode) {
-      // Group Header Logic
-      Set<String> participants = _presenceMap[_activeChatId] ?? {};
-      int count = participants.length;
-      if (count > 0) {
-        subtitle = "${participants.take(3).join(', ')}";
-        if (count > 3) subtitle += " +${count - 3}";
-        statusColor = Colors.greenAccent;
-      } else {
-        subtitle = "Waiting for members...";
-      }
-    } else {
-      // DM Header Logic
-      bool isOnline = (_presenceMap[_activeChatId]?.isNotEmpty ?? false);
-      subtitle = isOnline ? "Online" : "Offline";
-      statusColor = isOnline ? Colors.greenAccent : Colors.grey;
-    }
-
-    return Container(
-      padding: EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        color: Colors.blue[800],
-        // No rounded corners here, container below handles it
-      ),
-      child: Row(children: [
-        IconButton(
-          icon: Icon(Icons.arrow_back, color: Colors.white), 
-          onPressed: () => setState(() => _activeChatId = null)
-        ),
-        SizedBox(width: 8),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(title, style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-              Text(subtitle, style: TextStyle(color: Colors.white70, fontSize: 10)),
-            ],
-          ),
-        ),
-        Container(
-          width: 8, height: 8,
-          decoration: BoxDecoration(color: statusColor, shape: BoxShape.circle),
-        )
-      ]),
-    );
-  } */
-
   Widget _buildInbox() {
-    if (_isLoadingInbox) return Center(child: CircularProgressIndicator());
-
     return Column(
       children: [
-        // Inbox Header with Refresh
+        // 1. Inbox Header (Updated: Close Button instead of Refresh)
         Container(
-          padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           color: Colors.blue[50],
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text("Chats", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-              InkWell(
-                onTap: _loadInbox, 
-                child: Icon(Icons.refresh, size: 20, color: Colors.blue[800])
+              Text("Chats", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.blue[900])),
+              
+              // Minimized/Close Button
+              IconButton(
+                icon: Icon(Icons.close, size: 22, color: Colors.blue[800]),
+                onPressed: _toggleChat, // Minimizes the window
+                padding: EdgeInsets.zero,
+                constraints: BoxConstraints(),
               )
             ],
           ),
         ),
+
+        // 2. Inbox List
         Expanded(
-          child: ListView(
-            padding: EdgeInsets.zero,
-            children: [
-              if (_myRooms.isEmpty && _myColleagues.isEmpty)
-                Padding(padding: EdgeInsets.all(20), child: Text("No active chats found.")),
+          child: _isLoadingInbox 
+            ? Center(child: CircularProgressIndicator())
+            : RefreshIndicator( // Added Pull-to-Refresh since icon is gone
+                onRefresh: _loadInbox,
+                child: ListView(
+                  padding: EdgeInsets.zero,
+                  children: [
+                    if (_myRooms.isEmpty && _myColleagues.isEmpty)
+                      Padding(padding: EdgeInsets.all(20), child: Text("No active chats found.")),
 
-              if (_myRooms.isNotEmpty) ...[
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-                  child: Text("MY TICKETS", style: TextStyle(color: Colors.grey, fontSize: 11, fontWeight: FontWeight.bold)),
+                    if (_myRooms.isNotEmpty) ...[
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+                        child: Text("MY TICKETS", style: TextStyle(color: Colors.grey, fontSize: 11, fontWeight: FontWeight.bold)),
+                      ),
+                      ..._myRooms.map((r) => ListTile(
+                        dense: true,
+                        leading: Icon(Icons.confirmation_number, size: 20, color: Colors.blue),
+                        title: Text(r),
+                        onTap: () {
+                           _xmpp.joinRoom(r, widget.currentUser);
+                           setState(() { 
+                             _history[r] = _history[r] ?? []; // Ensure history exists
+                             _activeChatId = r; 
+                             _isGroupMode = true; 
+                           });
+                        },
+                      )),
+                    ],
+
+                    if (_myColleagues.isNotEmpty) ...[
+                      Divider(),
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+                        child: Text("DIRECT MESSAGES", style: TextStyle(color: Colors.grey, fontSize: 11, fontWeight: FontWeight.bold)),
+                      ),
+                      ..._myColleagues.map((u) => ListTile(
+                        dense: true,
+                        leading: Icon(Icons.person, size: 20, color: Colors.green),
+                        title: Text(u),
+                        trailing: Container(
+                          width: 8, height: 8,
+                          decoration: BoxDecoration(
+                            color: (_presenceMap[u]?.isNotEmpty ?? false) ? Colors.green : Colors.grey[300],
+                            shape: BoxShape.circle
+                          ),
+                        ),
+                        onTap: () => setState(() {  
+                          _history[u] = _history[u] ?? [];
+                          _activeChatId = u; 
+                          _isGroupMode = false; 
+                        }),
+                      )),
+                    ],
+                  ],
                 ),
-                ..._myRooms.map((r) => ListTile(
-                  dense: true,
-                  leading: Icon(Icons.confirmation_number, size: 20, color: Colors.blue),
-                  title: Text(r),
-                  onTap: () {
-                     // Join room on tap
-                     _xmpp.joinRoom(r, widget.currentUser);
-                     setState(() { _history[r] = []; _activeChatId = r; _isGroupMode = true; });
-                  },
-                )),
-              ],
-
-              if (_myColleagues.isNotEmpty) ...[
-                Divider(),
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-                  child: Text("DIRECT MESSAGES", style: TextStyle(color: Colors.grey, fontSize: 11, fontWeight: FontWeight.bold)),
-                ),
-                ..._myColleagues.map((u) => ListTile(
-                  dense: true,
-                  leading: Icon(Icons.person, size: 20, color: Colors.green),
-                  title: Text(u),
-                  // Presence Dot
-                  trailing: Container(
-                    width: 8, height: 8,
-                    decoration: BoxDecoration(
-                      color: (_presenceMap[u]?.isNotEmpty ?? false) ? Colors.green : Colors.grey[300],
-                      shape: BoxShape.circle
-                    ),
-                  ),
-                  onTap: () => setState(() {  _activeChatId = u; _isGroupMode = false; }),
-                )),
-
-              ],
-            ],
-          ),
+              ),
         ),
       ],
     );
   }
 
-/*   Widget _buildChat() {
+  Widget _buildChat() {
     return Column(
       children: [
-        _buildHeader(),
-        Expanded(
-          child: ListView.builder(
-            padding: EdgeInsets.all(8),
-            itemCount: (_history[_activeChatId!] ?? []).length,
-            itemBuilder: (ctx, i) {
-              String msg = _history[_activeChatId!]![i];
-              // Optional: You could parse "Sender: Body" here for better UI bubbles
-              return Padding(
-                padding: EdgeInsets.symmetric(vertical: 4), 
-                child: Text(msg)
-              );
-            },
+        // 1. Header (Includes Back & Close Buttons)
+        Container(
+          padding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+          color: Colors.blue[800], 
+          child: Row(
+            children: [
+              IconButton(
+                icon: Icon(Icons.arrow_back, color: Colors.white, size: 20),
+                onPressed: () => setState(() => _activeChatId = null),
+                padding: EdgeInsets.zero,
+                constraints: BoxConstraints(),
+              ),
+              SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      _activeChatId ?? "Chat",
+                      style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    Text(
+                      "Online", // You can wire up presence here later
+                      style: TextStyle(color: Colors.white70, fontSize: 10),
+                      overflow: TextOverflow.ellipsis,
+                    )
+                  ],
+                ),
+              ),
+              // Close / Minimize Button
+              IconButton(
+                icon: Icon(Icons.close, color: Colors.white, size: 20),
+                onPressed: _toggleChat,
+                padding: EdgeInsets.zero,
+                constraints: BoxConstraints(),
+              ),
+            ],
           ),
         ),
-        Divider(height: 1),
-        Padding(
+
+        // 2. Message List
+        Expanded(
+          child: Container(
+            color: Colors.grey[100],
+            child: ListView.builder(
+              padding: EdgeInsets.all(12),
+              itemCount: (_history[_activeChatId!] ?? []).length,
+              itemBuilder: (ctx, i) {
+                String msg = _history[_activeChatId!]![i];
+                bool isMe = msg.startsWith("Me:");
+                String displayMsg = msg.contains(":") ? msg.substring(msg.indexOf(":") + 1).trim() : msg;
+                String senderName = msg.contains(":") ? msg.split(":")[0] : "Anon";
+
+                return Align(
+                  alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
+                  child: Container(
+                    margin: EdgeInsets.symmetric(vertical: 4),
+                    padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: isMe ? Colors.blue[100] : Colors.white,
+                      borderRadius: BorderRadius.only(
+                        topLeft: Radius.circular(12),
+                        topRight: Radius.circular(12),
+                        bottomLeft: isMe ? Radius.circular(12) : Radius.circular(0),
+                        bottomRight: isMe ? Radius.circular(0) : Radius.circular(12),
+                      ),
+                      boxShadow: [
+                        BoxShadow(color: Colors.black12, blurRadius: 2, offset: Offset(0, 1))
+                      ],
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (!isMe) 
+                          Text(
+                            senderName, 
+                            style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.grey[600])
+                          ),
+                        Text(displayMsg, style: TextStyle(fontSize: 13)),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ),
+
+        // 3. Input Area
+        Container(
+          decoration: BoxDecoration(
+            color: Colors.white,
+            border: Border(top: BorderSide(color: Colors.grey[300]!)),
+          ),
           padding: EdgeInsets.all(8.0),
           child: Row(
             children: [
               Expanded(
                 child: TextField(
-                  controller: _ctrl, 
+                  controller: _ctrl,
                   onSubmitted: (_) => _send(),
                   decoration: InputDecoration(
                     hintText: "Type a message...",
-                    border: InputBorder.none
+                    contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(20),
+                      borderSide: BorderSide(color: Colors.grey[300]!),
+                    ),
+                    isDense: true,
+                    fillColor: Colors.grey[50],
+                    filled: true,
                   ),
-                )
+                ),
               ),
-              IconButton(icon: Icon(Icons.send, color: Colors.blue), onPressed: _send)
+              SizedBox(width: 8),
+              CircleAvatar(
+                backgroundColor: Colors.blue[800],
+                radius: 18,
+                child: IconButton(
+                  icon: Icon(Icons.send, color: Colors.white, size: 16),
+                  onPressed: _send,
+                  padding: EdgeInsets.zero,
+                ),
+              )
             ],
           ),
         )
       ],
     );
-  } */
-
-Widget _buildChat() {
-  return Column(
-    children: [
-      // 1. THE HEADER (Includes Back & Close Buttons)
-      Container(
-        padding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-        color: Colors.blue[800], // Match your app theme
-        child: Row(
-          children: [
-            // Back to Inbox
-            IconButton(
-              icon: Icon(Icons.arrow_back, color: Colors.white, size: 20),
-              onPressed: () => setState(() => _activeChatId = null),
-              padding: EdgeInsets.zero,
-              constraints: BoxConstraints(), // Minimizes padding
-            ),
-            SizedBox(width: 10),
-            
-            // Title Area
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    _activeChatId ?? "Chat",
-                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  // Optional: Show status or topic
-                  Text(
-                    "SystemBot, User...",
-                    style: TextStyle(color: Colors.white70, fontSize: 10),
-                    overflow: TextOverflow.ellipsis,
-                  )
-                ],
-              ),
-            ),
-            
-            // Close / Minimize Button (The Fix for the collision)
-            IconButton(
-              icon: Icon(Icons.close, color: Colors.white, size: 20),
-              onPressed: _toggleChat, // Closes the overlay entirely
-              padding: EdgeInsets.zero,
-              constraints: BoxConstraints(),
-            ),
-          ],
-        ),
-      ),
-
-      // 2. MESSAGE LIST
-      Expanded(
-        child: Container(
-          color: Colors.grey[100], // Light background for chat area
-          child: ListView.builder(
-            padding: EdgeInsets.all(12),
-            // Auto-scroll to bottom usually requires a ScrollController, 
-            // but for now, reverse: true is a quick hack if you reverse the list order.
-            // Keeping it standard for this example:
-            itemCount: (_history[_activeChatId!] ?? []).length,
-            itemBuilder: (ctx, i) {
-              String msg = _history[_activeChatId!]![i];
-              bool isMe = msg.startsWith("Me:");
-              
-              // Remove "Me:" or "User:" prefix for display cleanliness
-              String displayMsg = msg.contains(":") ? msg.substring(msg.indexOf(":") + 1).trim() : msg;
-
-              return Align(
-                alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
-                child: Container(
-                  margin: EdgeInsets.symmetric(vertical: 4),
-                  padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: isMe ? Colors.blue[100] : Colors.white,
-                    borderRadius: BorderRadius.only(
-                      topLeft: Radius.circular(12),
-                      topRight: Radius.circular(12),
-                      bottomLeft: isMe ? Radius.circular(12) : Radius.circular(0),
-                      bottomRight: isMe ? Radius.circular(0) : Radius.circular(12),
-                    ),
-                    boxShadow: [
-                      BoxShadow(color: Colors.black12, blurRadius: 2, offset: Offset(0, 1))
-                    ],
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      if (!isMe) // Show sender name if it's not me
-                        Text(
-                          msg.split(":")[0], 
-                          style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.grey[600])
-                        ),
-                      Text(displayMsg, style: TextStyle(fontSize: 13)),
-                    ],
-                  ),
-                ),
-              );
-            },
-          ),
-        ),
-      ),
-
-      // 3. INPUT AREA
-      Container(
-        decoration: BoxDecoration(
-          color: Colors.white,
-          border: Border(top: BorderSide(color: Colors.grey[300]!)),
-        ),
-        padding: EdgeInsets.all(8.0),
-        child: Row(
-          children: [
-            Expanded(
-              child: TextField(
-                controller: _ctrl,
-                onSubmitted: (_) => _send(),
-                decoration: InputDecoration(
-                  hintText: "Type a message...",
-                  contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(20),
-                    borderSide: BorderSide(color: Colors.grey[300]!),
-                  ),
-                  isDense: true, // Makes it more compact
-                  fillColor: Colors.grey[50],
-                  filled: true,
-                ),
-              ),
-            ),
-            SizedBox(width: 8),
-            CircleAvatar(
-              backgroundColor: Colors.blue[800],
-              radius: 18,
-              child: IconButton(
-                icon: Icon(Icons.send, color: Colors.white, size: 16),
-                onPressed: _send,
-                padding: EdgeInsets.zero,
-              ),
-            )
-          ],
-        ),
-      )
-    ],
-  );
-}
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -504,81 +391,70 @@ Widget _buildChat() {
         // 1. The Main App (Background)
         widget.child,
 
-        // 2. The Chat Window (Foreground)
-        Positioned(
-          bottom: 20, 
-          right: 20,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              if (_isOpen)
-                Material(
-                  elevation: 10, 
-                  borderRadius: BorderRadius.circular(12),
-                  color: Colors.white,
-                  clipBehavior: Clip.antiAlias, // Clips the header cleanly
-                  child: Container(
-                    width: 320, 
-                    height: 450,
-                    child: _activeChatId == null ? _buildInbox() : _buildChat(),
-                  ),
-                ),
-              SizedBox(height: 10),
-              
-/*               // Toggle Button
-              FloatingActionButton(
-                backgroundColor: Colors.blue[800],
-                child: Icon(_isOpen ? Icons.close : Icons.chat),
-                onPressed: () => setState(() => _isOpen = !_isOpen),
-              ) */
-             
-            ],
+        // 2. The Chat Window (Only visible if Open)
+        if (_isOpen)
+          Positioned(
+            bottom: 20, 
+            right: 20,
+            child: Material(
+              elevation: 10, 
+              borderRadius: BorderRadius.circular(12),
+              color: Colors.white,
+              clipBehavior: Clip.antiAlias,
+              child: Container(
+                width: 320, 
+                height: 450,
+                child: _activeChatId == null ? _buildInbox() : _buildChat(),
+              ),
+            ),
           ),
-        ),
-        // The Floating Action Button (Header/Toggle)
-        Positioned(
-          bottom: 20,
-          right: 20,
-          child: FloatingActionButton(
-            backgroundColor: Colors.blue[800],
-            onPressed: _toggleChat, // Use our new logic
-            child: Stack(
-              clipBehavior: Clip.none, // Allow badge to overflow
-              children: [
-                Icon(_isOpen ? Icons.close : Icons.chat),
-                
-                // THE RED BADGE INDICATOR
-                if (!_isOpen && _unreadCount > 0)
-                  Positioned(
-                    right: -4,
-                    top: -4,
-                    child: Container(
-                      padding: EdgeInsets.all(4),
-                      decoration: BoxDecoration(
-                        color: Colors.red,
-                        shape: BoxShape.circle,
-                        border: Border.all(color: Colors.white, width: 1.5),
-                      ),
-                      constraints: BoxConstraints(
-                        minWidth: 16,
-                        minHeight: 16,
-                      ),
-                      child: Center(
-                        child: Text(
-                          _unreadCount > 9 ? "9+" : "$_unreadCount",
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 10,
-                            fontWeight: FontWeight.bold,
+
+        // 3. The Toggle Button (Only visible if CLOSED)
+        // This if condition fixes your issue of the button showing over the chat
+        if (!_isOpen)
+          Positioned(
+            bottom: 20,
+            right: 20,
+            child: FloatingActionButton(
+              backgroundColor: Colors.blue[800],
+              onPressed: _toggleChat,
+              child: Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  Icon(Icons.chat),
+                  
+                  // Red Badge
+                  if (_unreadCount > 0)
+                    Positioned(
+                      right: -4,
+                      top: -4,
+                      child: Container(
+                        padding: EdgeInsets.all(4),
+                        decoration: BoxDecoration(
+                          color: Colors.red,
+                          shape: BoxShape.circle,
+                          border: Border.all(color: Colors.white, width: 1.5),
+                        ),
+                        constraints: BoxConstraints(
+                          minWidth: 16,
+                          minHeight: 16,
+                        ),
+                        child: Center(
+                          child: Text(
+                            _unreadCount > 9 ? "9+" : "$_unreadCount",
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                            ),
                           ),
                         ),
                       ),
                     ),
-                  ),
-              ],
+                ],
+              ),
             ),
-          ),
-        ),        
+          ),        
       ],
     );
   }
