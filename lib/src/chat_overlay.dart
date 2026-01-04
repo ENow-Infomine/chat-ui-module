@@ -34,6 +34,8 @@ class _ChatOverlayState extends State<ChatOverlay> {
   List<String> _myRooms = [];
   List<String> _myColleagues = [];
   bool _isLoadingInbox = true;
+    int _unreadCount = 0;
+
 
   // --- Chat Data ---
   final Map<String, List<String>> _history = {};
@@ -62,10 +64,18 @@ class _ChatOverlayState extends State<ChatOverlay> {
         String chatKey = from.split('@')[0]; // The ID (room or user)
         String sender;
 
+        // 1. SILENT CONTROL SIGNAL (from Backend)
         if (type == 'headline') {
-           // System Alerts come from the Room Bare JID
-           chatKey = from.split('@')[0]; 
-           sender = "System";
+          if (body == 'REFRESH_INBOX') {
+            print("System Signal: Refreshing Inbox...");
+            _loadInbox(); // Fetch new tickets from API
+            
+            // Show badge if chat is closed
+            if (!_isOpen) {
+              if (mounted) setState(() => _unreadCount++);
+            }
+          }
+          return; // <--- EXIT: Do not add to chat history!
         } 
         else if (type == 'groupchat') {
            // Room messages: room@conf/Nick
@@ -97,6 +107,8 @@ class _ChatOverlayState extends State<ChatOverlay> {
         // --- UPDATE HISTORY ---
         if (mounted) {
           setState(() {
+            // Handle Unread Badge for Chat Messages
+            if (!_isOpen) _unreadCount++;            
             if (!_history.containsKey(chatKey)) _history[chatKey] = [];
             _history[chatKey]!.add("$sender: $body");
           });
@@ -147,6 +159,17 @@ class _ChatOverlayState extends State<ChatOverlay> {
         _isLoadingInbox = false;
       });
     }
+  }
+
+
+  void _toggleChat() {
+    setState(() {
+      _isOpen = !_isOpen;
+      if (_isOpen) {
+        _unreadCount = 0; // Clear badge
+        _loadInbox();     // Auto-refresh when opening
+      }
+    });
   }
 
   void _send() {
@@ -358,15 +381,60 @@ class _ChatOverlayState extends State<ChatOverlay> {
                 ),
               SizedBox(height: 10),
               
-              // Toggle Button
+/*               // Toggle Button
               FloatingActionButton(
                 backgroundColor: Colors.blue[800],
                 child: Icon(_isOpen ? Icons.close : Icons.chat),
                 onPressed: () => setState(() => _isOpen = !_isOpen),
-              )
+              ) */
+             
             ],
           ),
-        )
+        ),
+        // The Floating Action Button (Header/Toggle)
+        Positioned(
+          bottom: 20,
+          right: 20,
+          child: FloatingActionButton(
+            backgroundColor: Colors.blue[800],
+            onPressed: _toggleChat, // Use our new logic
+            child: Stack(
+              clipBehavior: Clip.none, // Allow badge to overflow
+              children: [
+                Icon(_isOpen ? Icons.close : Icons.chat),
+                
+                // THE RED BADGE INDICATOR
+                if (!_isOpen && _unreadCount > 0)
+                  Positioned(
+                    right: -4,
+                    top: -4,
+                    child: Container(
+                      padding: EdgeInsets.all(4),
+                      decoration: BoxDecoration(
+                        color: Colors.red,
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Colors.white, width: 1.5),
+                      ),
+                      constraints: BoxConstraints(
+                        minWidth: 16,
+                        minHeight: 16,
+                      ),
+                      child: Center(
+                        child: Text(
+                          _unreadCount > 9 ? "9+" : "$_unreadCount",
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),        
       ],
     );
   }
