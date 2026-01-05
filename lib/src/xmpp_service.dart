@@ -3,7 +3,7 @@ import 'dart:async';
 import 'xmpp_config.dart';
 
 class XmppService {
-  final Function(String from, String body, String type) onMessage;
+  final Function(String from, String body, String type, String? timestampStr) onMessage;
   final Function() onConnected;
 
   // 1. Restore Presence Stream
@@ -19,7 +19,7 @@ class XmppService {
     js.context.callMethod('connectXmpp', [
       XmppConfig().wsUrl, jid, pass,
       js.allowInterop(() => onConnected()),
-      js.allowInterop((from, body, type) => onMessage(from, body, type)),
+      js.allowInterop((from, body, type, timestampStr) => onMessage(from, body, type, timestampStr)),
       js.allowInterop((String from, String status) {
         _presenceController.add({'from': from, 'status': status});
       })

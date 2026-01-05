@@ -21,36 +21,35 @@ class ChatOverlay extends StatefulWidget {
 }
 
 class _ChatOverlayState extends State<ChatOverlay> {
-  // --- XMPP State ---
+  // --- XMPP Service ---
   late XmppService _xmpp;
   
-  // --- UI Navigation State ---
+  // --- UI State ---
   bool _isOpen = false;
   String? _activeChatId; 
   bool _isGroupMode = true;
+  bool _isLoadingInbox = true;
 
   // --- Data State ---
   List<String> _myRooms = [];
   List<String> _myColleagues = [];
-  bool _isLoadingInbox = true;
-
-  // --- Unread Map (The Single Source of Truth) ---
+  
+  // Single Source of Truth for Badges (Key must be Lowercase)
   final Map<String, int> _unreadCounts = {}; 
-
-  // LOGIC: GLOBAL COUNT (Sum of all rooms) -> Used for the FAB Badge
+  
+  // Global Badge Count for FAB
   int get _totalGlobalUnread => _unreadCounts.values.fold(0, (sum, count) => sum + count);
 
-  // --- Chat Data ---
+  // Chat History & Presence
   final Map<String, List<String>> _history = {};
   final Map<String, Set<String>> _presenceMap = {}; 
   final TextEditingController _ctrl = TextEditingController();
 
-  // --- Timestamp Helper ---
-  String _getTimestamp() {
-    final now = DateTime.now();
+  // --- Helper: Format Timestamp ---
+  String _formatTime(DateTime dt) {
     String _twoDigits(int n) => n.toString().padLeft(2, '0');
     // Format: dd/mm/yyyy - hh:mm
-    return "${_twoDigits(now.day)}/${_twoDigits(now.month)}/${now.year} - ${_twoDigits(now.hour)}:${_twoDigits(now.minute)}";
+    return "${_twoDigits(dt.day)}/${_twoDigits(dt.month)}/${dt.year} - ${_twoDigits(dt.hour)}:${_twoDigits(dt.minute)}";
   }
 
   @override
@@ -62,26 +61,28 @@ class _ChatOverlayState extends State<ChatOverlay> {
 
     _xmpp = XmppService(
       onConnected: () => print("XMPP Connected"),
-      onMessage: (from, body, type) {
-        String chatKey = from.split('@')[0];
+      
+      // Updated Callback: Accepts timestampStr (nullable)
+      onMessage: (from, body, type, timestampStr) {
+        
+        // FIX 1: Normalize Key to Lowercase (Matches XMPP behavior)
+        String chatKey = from.split('@')[0].toLowerCase(); 
         String sender;
 
-        // 1. System Signals (Don't increment badge, just refresh list)
+        // 1. Handle System Signals
         if (type == 'headline') {
           if (body == 'REFRESH_INBOX') _loadInbox();
-          return; 
+          return; // Don't show in chat
         } 
         
-        // 2. Parse Sender
+        // 2. Determine Sender Name
         if (type == 'groupchat') {
-           chatKey = from.split('@')[0];
            sender = from.contains('/') ? from.split('/')[1] : "System";
         } else {
-           chatKey = from.split('@')[0];
            sender = chatKey; 
         }
 
-        // 3. Desktop Notification
+        // 3. Desktop Notification (Background only)
         if (html.document.visibilityState == 'hidden') {
            if (html.Notification.permission == 'granted') {
               var n = html.Notification("Msg from $sender", body: body);
@@ -93,17 +94,33 @@ class _ChatOverlayState extends State<ChatOverlay> {
            }
         }
 
-        // 4. UPDATE STATE
+        // 4. FIX 2: Handle Timestamp (History vs Live)
+        DateTime msgTime;
+        if (timestampStr != null && timestampStr.isNotEmpty) {
+           // History Message (ISO 8601 from server)
+           try {
+             msgTime = DateTime.parse(timestampStr).toLocal();
+           } catch (e) {
+             msgTime = DateTime.now();
+           }
+        } else {
+           // Live Message
+           msgTime = DateTime.now();
+        }
+        String timeString = _formatTime(msgTime);
+
+        // 5. Update State
         if (mounted) {
           setState(() {
-            // Add to history with Timestamp
             if (!_history.containsKey(chatKey)) _history[chatKey] = [];
-            _history[chatKey]!.add("${_getTimestamp()} - $sender: $body");
-
-            // CHECK: Is this specific chat currently open and visible?
-            bool isChatVisible = _isOpen && _activeChatId == chatKey;
             
-            // If NOT visible, increment the unread count for this specific ID
+            // Format: "dd/MM/yyyy - HH:mm - Sender: Body"
+            _history[chatKey]!.add("$timeString - $sender: $body");
+
+            // Unread Badge Logic
+            // Compare lowercase active ID with lowercase chatKey
+            bool isChatVisible = _isOpen && _activeChatId?.toLowerCase() == chatKey;
+            
             if (!isChatVisible) {
               _unreadCounts[chatKey] = (_unreadCounts[chatKey] ?? 0) + 1;
             }
@@ -112,20 +129,20 @@ class _ChatOverlayState extends State<ChatOverlay> {
       },
     );
 
-    // Presence Logic
+    // Presence Stream
     _xmpp.presenceStream.listen((event) {
       if (!mounted) return;
       String from = event['from']!; 
       String status = event['status']!; 
       setState(() {
         if (from.contains('/')) {
-          String room = from.split('@')[0];
+          String room = from.split('@')[0].toLowerCase();
           String nick = from.split('/')[1];
           if (!_presenceMap.containsKey(room)) _presenceMap[room] = {};
           if (status == 'offline') _presenceMap[room]!.remove(nick);
           else _presenceMap[room]!.add(nick);
         } else {
-          String user = from.split('@')[0];
+          String user = from.split('@')[0].toLowerCase();
           if (!_presenceMap.containsKey(user)) _presenceMap[user] = {};
           if (status == 'offline') _presenceMap[user]!.clear(); 
           else _presenceMap[user]!.add('online');
@@ -148,24 +165,27 @@ class _ChatOverlayState extends State<ChatOverlay> {
     }
   }
 
-  // Opens a specific chat and clears its badge
   void _openChat(String id, bool isGroup) {
+    // Normalize ID to lowercase for history/badge lookups
+    String normalizedId = id.toLowerCase();
+    
     setState(() {
       _isOpen = true;
-      _activeChatId = id;
+      _activeChatId = normalizedId; 
       _isGroupMode = isGroup;
-      _history[id] = _history[id] ?? [];
+      _history[normalizedId] = _history[normalizedId] ?? [];
       
-      // CLEAR UNREAD COUNT FOR THIS ITEM
-      _unreadCounts[id] = 0;
+      // Clear badge for this specific chat
+      _unreadCounts[normalizedId] = 0;
     });
+    
+    // Join room (XMPP handles case, but usually lowercase)
     if (isGroup) _xmpp.joinRoom(id, widget.currentUser);
   }
 
   void _toggleChat() {
     setState(() {
       _isOpen = !_isOpen;
-      // Refresh inbox when opening main window
       if (_isOpen) _loadInbox();     
     });
   }
@@ -176,15 +196,17 @@ class _ChatOverlayState extends State<ChatOverlay> {
     
     _xmpp.sendMessage(_activeChatId!, text, isGroup: _isGroupMode);
     
+    String timeString = _formatTime(DateTime.now());
+
     setState(() {
       if (!_history.containsKey(_activeChatId!)) _history[_activeChatId!] = [];
-      // Add to history with Timestamp and "Me"
-      _history[_activeChatId!]!.add("${_getTimestamp()} - Me: $text");
+      _history[_activeChatId!]!.add("$timeString - Me: $text");
       _ctrl.clear();
     });
   }
 
-  // Helper Widget for Badges
+  // --- Widget Helpers ---
+
   Widget _buildBadge(int count) {
     if (count == 0) return SizedBox.shrink();
     return Container(
@@ -203,7 +225,7 @@ class _ChatOverlayState extends State<ChatOverlay> {
   Widget _buildInbox() {
     return Column(
       children: [
-        // Header
+        // Inbox Header
         Container(
           padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           color: Colors.blue[50],
@@ -211,7 +233,6 @@ class _ChatOverlayState extends State<ChatOverlay> {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Text("Chats", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.blue[900])),
-              // Close/Minimize Button
               IconButton(
                 icon: Icon(Icons.close, size: 22, color: Colors.blue[800]),
                 onPressed: _toggleChat, 
@@ -221,7 +242,7 @@ class _ChatOverlayState extends State<ChatOverlay> {
             ],
           ),
         ),
-        // List
+        // Inbox List
         Expanded(
           child: _isLoadingInbox 
             ? Center(child: CircularProgressIndicator())
@@ -239,14 +260,15 @@ class _ChatOverlayState extends State<ChatOverlay> {
                         child: Text("MY TICKETS", style: TextStyle(color: Colors.grey, fontSize: 11, fontWeight: FontWeight.bold)),
                       ),
                       ..._myRooms.map((r) {
-                        int count = _unreadCounts[r] ?? 0;
+                        // FIX: Lookup using lowercase key
+                        int count = _unreadCounts[r.toLowerCase()] ?? 0;
                         
                         return ListTile(
                           dense: true,
                           leading: Icon(Icons.confirmation_number, size: 20, color: Colors.blue),
                           title: Text(r, style: TextStyle(fontWeight: count > 0 ? FontWeight.bold : FontWeight.normal)),
                           
-                          // FIX: Explicitly size trailing to prevent layout errors
+                          // FIX: SizedBox prevents layout error
                           trailing: SizedBox(
                             width: 32.0,
                             child: Align(
@@ -268,15 +290,16 @@ class _ChatOverlayState extends State<ChatOverlay> {
                         child: Text("DIRECT MESSAGES", style: TextStyle(color: Colors.grey, fontSize: 11, fontWeight: FontWeight.bold)),
                       ),
                       ..._myColleagues.map((u) {
-                        int count = _unreadCounts[u] ?? 0;
-                        bool isOnline = (_presenceMap[u]?.isNotEmpty ?? false);
+                        // FIX: Lookup using lowercase key
+                        int count = _unreadCounts[u.toLowerCase()] ?? 0;
+                        bool isOnline = (_presenceMap[u.toLowerCase()]?.isNotEmpty ?? false);
 
                         return ListTile(
                           dense: true,
                           leading: Icon(Icons.person, size: 20, color: Colors.green),
                           title: Text(u, style: TextStyle(fontWeight: count > 0 ? FontWeight.bold : FontWeight.normal)),
                           
-                          // FIX: Explicitly size trailing
+                          // FIX: SizedBox prevents layout error
                           trailing: SizedBox(
                             width: 32.0,
                             child: Align(
@@ -307,7 +330,7 @@ class _ChatOverlayState extends State<ChatOverlay> {
   Widget _buildChat() {
     return Column(
       children: [
-        // Header
+        // Chat Header
         Container(
           padding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
           color: Colors.blue[800], 
@@ -317,7 +340,7 @@ class _ChatOverlayState extends State<ChatOverlay> {
                 icon: Icon(Icons.arrow_back, color: Colors.white, size: 20),
                 onPressed: () => setState(() {
                   _activeChatId = null; 
-                  _loadInbox(); // Refresh inbox list logic
+                  _loadInbox(); 
                 }),
                 padding: EdgeInsets.zero,
                 constraints: BoxConstraints(),
@@ -346,7 +369,7 @@ class _ChatOverlayState extends State<ChatOverlay> {
           ),
         ),
         
-        // Messages
+        // Chat Messages
         Expanded(
           child: Container(
             color: Colors.grey[100],
@@ -356,9 +379,8 @@ class _ChatOverlayState extends State<ChatOverlay> {
               itemBuilder: (ctx, i) {
                 String msg = _history[_activeChatId!]![i];
                 
-                // Parsing logic for "Timestamp - Sender: Body"
-                // Example: "05/01/2026 - 12:00 - Me: Hello World"
-                
+                // PARSING LOGIC: "Timestamp - Sender: Body"
+                // Finds the ": " separator
                 int splitIndex = msg.indexOf(": ");
                 String headerInfo; 
                 String displayMsg;
@@ -393,7 +415,7 @@ class _ChatOverlayState extends State<ChatOverlay> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        // Header (Time + Sender)
+                        // Header (Timestamp - Sender)
                         Text(
                           headerInfo, 
                           style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.grey[600])
@@ -410,7 +432,7 @@ class _ChatOverlayState extends State<ChatOverlay> {
           ),
         ),
         
-        // Input
+        // Input Area
         Container(
           decoration: BoxDecoration(
             color: Colors.white,
@@ -487,7 +509,7 @@ class _ChatOverlayState extends State<ChatOverlay> {
                 children: [
                   Icon(Icons.chat),
                   
-                  // GLOBAL UNREAD BADGE
+                  // Global Badge
                   if (_totalGlobalUnread > 0)
                     Positioned(
                       right: -4,
