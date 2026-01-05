@@ -23,6 +23,7 @@ class ChatOverlay extends StatefulWidget {
 class _ChatOverlayState extends State<ChatOverlay> {
   // --- XMPP Service ---
   late XmppService _xmpp;
+  bool _isConnected = false; // Track connection status
   
   // --- UI State ---
   bool _isOpen = false;
@@ -34,6 +35,9 @@ class _ChatOverlayState extends State<ChatOverlay> {
   List<String> _myRooms = [];
   List<String> _myColleagues = [];
   
+  // Track joined rooms to avoid double-joining
+  final Set<String> _joinedRooms = {}; 
+
   // Single Source of Truth for Badges (Key must be Lowercase)
   final Map<String, int> _unreadCounts = {}; 
   
@@ -45,13 +49,9 @@ class _ChatOverlayState extends State<ChatOverlay> {
   final Map<String, Set<String>> _presenceMap = {}; 
   final TextEditingController _ctrl = TextEditingController();
 
-    // NEW: Track which rooms we have already joined
-  final Set<String> _joinedRooms = {}; 
-
   // --- Helper: Format Timestamp ---
   String _formatTime(DateTime dt) {
     String _twoDigits(int n) => n.toString().padLeft(2, '0');
-    // Format: dd/mm/yyyy - hh:mm
     return "${_twoDigits(dt.day)}/${_twoDigits(dt.month)}/${dt.year} - ${_twoDigits(dt.hour)}:${_twoDigits(dt.minute)}";
   }
 
@@ -60,32 +60,37 @@ class _ChatOverlayState extends State<ChatOverlay> {
     super.initState();
     if (html.Notification.permission != 'granted') html.Notification.requestPermission();
     
+    // 1. Start fetching API data (might finish before or after XMPP connects)
     _loadInbox();
 
+    // 2. Init XMPP
     _xmpp = XmppService(
-      onConnected: () => print("XMPP Connected"),
+      onConnected: () {
+        print("XMPP Connected Callback");
+        if (mounted) {
+          setState(() {
+            _isConnected = true; 
+          });
+          // CRITICAL FIX: Now that we are connected, join any rooms waiting in the list
+          _joinAllPendingRooms();
+        }
+      },
       
-      // Updated Callback: Accepts timestampStr (nullable)
       onMessage: (from, body, type, timestampStr) {
-        
-        // FIX 1: Normalize Key to Lowercase (Matches XMPP behavior)
         String chatKey = from.split('@')[0].toLowerCase(); 
         String sender;
 
-        // 1. Handle System Signals
         if (type == 'headline') {
           if (body == 'REFRESH_INBOX') _loadInbox();
-          return; // Don't show in chat
+          return; 
         } 
         
-        // 2. Determine Sender Name
         if (type == 'groupchat') {
            sender = from.contains('/') ? from.split('/')[1] : "System";
         } else {
            sender = chatKey; 
         }
 
-        // 3. Desktop Notification (Background only)
         if (html.document.visibilityState == 'hidden') {
            if (html.Notification.permission == 'granted') {
               var n = html.Notification("Msg from $sender", body: body);
@@ -97,12 +102,17 @@ class _ChatOverlayState extends State<ChatOverlay> {
            }
         }
 
-        // 4. FIX 2: Handle Timestamp (History vs Live)
         DateTime msgTime;
+        bool isRecent = true; // Flag for Smart Badge Logic
+
         if (timestampStr != null && timestampStr.isNotEmpty) {
-           // History Message (ISO 8601 from server)
+           // History Message
            try {
              msgTime = DateTime.parse(timestampStr).toLocal();
+             // If message is older than 5 minutes, consider it "Old History"
+             if (DateTime.now().difference(msgTime).inMinutes > 5) {
+               isRecent = false;
+             }
            } catch (e) {
              msgTime = DateTime.now();
            }
@@ -112,31 +122,16 @@ class _ChatOverlayState extends State<ChatOverlay> {
         }
         String timeString = _formatTime(msgTime);
 
-        // 5. Update State
         if (mounted) {
           setState(() {
             if (!_history.containsKey(chatKey)) _history[chatKey] = [];
-            
-            // Format: "dd/MM/yyyy - HH:mm - Sender: Body"
             _history[chatKey]!.add("$timeString - $sender: $body");
 
-            // Unread Badge Logic
-            // Compare lowercase active ID with lowercase chatKey
+            // Smart Badge Logic:
+            // 1. Chat window is NOT looking at this chat
+            // 2. AND the message is "Recent" (Live or < 5 mins old)
             bool isChatVisible = _isOpen && _activeChatId?.toLowerCase() == chatKey;
-
-            // Only increment badge if:
-            // 1. Chat is NOT visible
-            // 2. AND the message is somewhat recent (e.g., received in the last 5 minutes) 
-            //    OR it's a live message (timestampStr was null)
             
-            bool isRecent = true;
-            if (timestampStr != null) {
-               // If it's history older than 5 mins, treat as "Read"
-               if (DateTime.now().difference(msgTime).inMinutes > 5) {
-                 isRecent = false;
-               }
-            }
-
             if (!isChatVisible && isRecent) {
               _unreadCounts[chatKey] = (_unreadCounts[chatKey] ?? 0) + 1;
             }
@@ -166,10 +161,11 @@ class _ChatOverlayState extends State<ChatOverlay> {
       });
     });
 
+    // 3. Start Connection
     _xmpp.connect(widget.currentUser, widget.currentPass);
   }
 
-Future<void> _loadInbox() async {
+  Future<void> _loadInbox() async {
     setState(() => _isLoadingInbox = true);
     final data = await BackendService.getInbox(widget.currentUser);
     
@@ -179,26 +175,33 @@ Future<void> _loadInbox() async {
         _myColleagues = data['colleagues']!;
         _isLoadingInbox = false;
       });
+      
+      // Try to join rooms (Only works if _isConnected is true)
+      _joinAllPendingRooms();
+    }
+  }
 
-      // --- FIX: AUTO-JOIN ROOMS ---
-      // We must join the room to receive "onMessage" events for badges
-      for (String room in _myRooms) {
-        String roomKey = room.toLowerCase();
-        
-        if (!_joinedRooms.contains(roomKey)) {
-          print("Auto-joining room for notifications: $room");
-          
-          // 1. Join XMPP
-          _xmpp.joinRoom(room, widget.currentUser);
-          
-          // 2. Mark as joined so we don't do it again
-          _joinedRooms.add(roomKey);
-        }
+  // --- CRITICAL HELPER METHOD ---
+  void _joinAllPendingRooms() {
+    // If XMPP isn't ready, do nothing. onConnected will call this later.
+    if (!_isConnected) {
+      print("Inbox loaded, but waiting for XMPP connection...");
+      return;
+    }
+
+    for (String room in _myRooms) {
+      String roomKey = room.toLowerCase();
+      
+      // Only join if we haven't already
+      if (!_joinedRooms.contains(roomKey)) {
+        print("Auto-joining room: $room");
+        _xmpp.joinRoom(room, widget.currentUser);
+        _joinedRooms.add(roomKey);
       }
     }
   }
 
-void _openChat(String id, bool isGroup) {
+  void _openChat(String id, bool isGroup) {
     String normalizedId = id.toLowerCase();
     
     setState(() {
@@ -211,10 +214,13 @@ void _openChat(String id, bool isGroup) {
       _unreadCounts[normalizedId] = 0;
     });
     
-    // Join if not already joined (Double check)
-    if (isGroup && !_joinedRooms.contains(normalizedId)) {
-       _xmpp.joinRoom(id, widget.currentUser);
-       _joinedRooms.add(normalizedId);
+    // Join logic (Double check)
+    if (isGroup) {
+       // If for some reason we aren't joined yet (e.g. connection dropped/reconnected), join now
+       if (!_joinedRooms.contains(normalizedId)) {
+          _xmpp.joinRoom(id, widget.currentUser);
+          _joinedRooms.add(normalizedId);
+       }
     }
   }
 
@@ -260,7 +266,7 @@ void _openChat(String id, bool isGroup) {
   Widget _buildInbox() {
     return Column(
       children: [
-        // Inbox Header
+        // Header
         Container(
           padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           color: Colors.blue[50],
@@ -277,7 +283,7 @@ void _openChat(String id, bool isGroup) {
             ],
           ),
         ),
-        // Inbox List
+        // List
         Expanded(
           child: _isLoadingInbox 
             ? Center(child: CircularProgressIndicator())
@@ -295,7 +301,6 @@ void _openChat(String id, bool isGroup) {
                         child: Text("MY TICKETS", style: TextStyle(color: Colors.grey, fontSize: 11, fontWeight: FontWeight.bold)),
                       ),
                       ..._myRooms.map((r) {
-                        // FIX: Lookup using lowercase key
                         int count = _unreadCounts[r.toLowerCase()] ?? 0;
                         
                         return ListTile(
@@ -303,7 +308,6 @@ void _openChat(String id, bool isGroup) {
                           leading: Icon(Icons.confirmation_number, size: 20, color: Colors.blue),
                           title: Text(r, style: TextStyle(fontWeight: count > 0 ? FontWeight.bold : FontWeight.normal)),
                           
-                          // FIX: SizedBox prevents layout error
                           trailing: SizedBox(
                             width: 32.0,
                             child: Align(
@@ -325,7 +329,6 @@ void _openChat(String id, bool isGroup) {
                         child: Text("DIRECT MESSAGES", style: TextStyle(color: Colors.grey, fontSize: 11, fontWeight: FontWeight.bold)),
                       ),
                       ..._myColleagues.map((u) {
-                        // FIX: Lookup using lowercase key
                         int count = _unreadCounts[u.toLowerCase()] ?? 0;
                         bool isOnline = (_presenceMap[u.toLowerCase()]?.isNotEmpty ?? false);
 
@@ -334,7 +337,6 @@ void _openChat(String id, bool isGroup) {
                           leading: Icon(Icons.person, size: 20, color: Colors.green),
                           title: Text(u, style: TextStyle(fontWeight: count > 0 ? FontWeight.bold : FontWeight.normal)),
                           
-                          // FIX: SizedBox prevents layout error
                           trailing: SizedBox(
                             width: 32.0,
                             child: Align(
@@ -365,7 +367,7 @@ void _openChat(String id, bool isGroup) {
   Widget _buildChat() {
     return Column(
       children: [
-        // Chat Header
+        // Header
         Container(
           padding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
           color: Colors.blue[800], 
@@ -404,7 +406,7 @@ void _openChat(String id, bool isGroup) {
           ),
         ),
         
-        // Chat Messages
+        // Messages
         Expanded(
           child: Container(
             color: Colors.grey[100],
@@ -413,9 +415,6 @@ void _openChat(String id, bool isGroup) {
               itemCount: (_history[_activeChatId!] ?? []).length,
               itemBuilder: (ctx, i) {
                 String msg = _history[_activeChatId!]![i];
-                
-                // PARSING LOGIC: "Timestamp - Sender: Body"
-                // Finds the ": " separator
                 int splitIndex = msg.indexOf(": ");
                 String headerInfo; 
                 String displayMsg;
@@ -450,13 +449,11 @@ void _openChat(String id, bool isGroup) {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        // Header (Timestamp - Sender)
                         Text(
                           headerInfo, 
                           style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.grey[600])
                         ),
                         SizedBox(height: 2),
-                        // Body
                         Text(displayMsg, style: TextStyle(fontSize: 13)),
                       ],
                     ),
@@ -467,7 +464,7 @@ void _openChat(String id, bool isGroup) {
           ),
         ),
         
-        // Input Area
+        // Input
         Container(
           decoration: BoxDecoration(
             color: Colors.white,
@@ -513,7 +510,6 @@ void _openChat(String id, bool isGroup) {
       children: [
         widget.child,
 
-        // CHAT WINDOW (Open)
         if (_isOpen)
           Positioned(
             bottom: 20, 
@@ -531,7 +527,6 @@ void _openChat(String id, bool isGroup) {
             ),
           ),
 
-        // FAB ICON (Closed)
         if (!_isOpen)
           Positioned(
             bottom: 20,
@@ -544,7 +539,6 @@ void _openChat(String id, bool isGroup) {
                 children: [
                   Icon(Icons.chat),
                   
-                  // Global Badge
                   if (_totalGlobalUnread > 0)
                     Positioned(
                       right: -4,
