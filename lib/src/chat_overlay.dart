@@ -34,13 +34,24 @@ class _ChatOverlayState extends State<ChatOverlay> {
   List<String> _myColleagues = [];
   bool _isLoadingInbox = true;
 
+  // --- Unread Map (The Single Source of Truth) ---
   final Map<String, int> _unreadCounts = {}; 
+
+  // LOGIC: GLOBAL COUNT (Sum of all rooms) -> Used for the FAB Badge
   int get _totalGlobalUnread => _unreadCounts.values.fold(0, (sum, count) => sum + count);
 
   // --- Chat Data ---
   final Map<String, List<String>> _history = {};
   final Map<String, Set<String>> _presenceMap = {}; 
   final TextEditingController _ctrl = TextEditingController();
+
+  // --- Timestamp Helper ---
+  String _getTimestamp() {
+    final now = DateTime.now();
+    String _twoDigits(int n) => n.toString().padLeft(2, '0');
+    // Format: dd/mm/yyyy - hh:mm
+    return "${_twoDigits(now.day)}/${_twoDigits(now.month)}/${now.year} - ${_twoDigits(now.hour)}:${_twoDigits(now.minute)}";
+  }
 
   @override
   void initState() {
@@ -50,16 +61,18 @@ class _ChatOverlayState extends State<ChatOverlay> {
     _loadInbox();
 
     _xmpp = XmppService(
-      onConnected: () => print("Connected"),
+      onConnected: () => print("XMPP Connected"),
       onMessage: (from, body, type) {
         String chatKey = from.split('@')[0];
         String sender;
 
+        // 1. System Signals (Don't increment badge, just refresh list)
         if (type == 'headline') {
           if (body == 'REFRESH_INBOX') _loadInbox();
           return; 
         } 
         
+        // 2. Parse Sender
         if (type == 'groupchat') {
            chatKey = from.split('@')[0];
            sender = from.contains('/') ? from.split('/')[1] : "System";
@@ -68,6 +81,7 @@ class _ChatOverlayState extends State<ChatOverlay> {
            sender = chatKey; 
         }
 
+        // 3. Desktop Notification
         if (html.document.visibilityState == 'hidden') {
            if (html.Notification.permission == 'granted') {
               var n = html.Notification("Msg from $sender", body: body);
@@ -79,13 +93,17 @@ class _ChatOverlayState extends State<ChatOverlay> {
            }
         }
 
+        // 4. UPDATE STATE
         if (mounted) {
           setState(() {
+            // Add to history with Timestamp
             if (!_history.containsKey(chatKey)) _history[chatKey] = [];
-            _history[chatKey]!.add("$sender: $body");
+            _history[chatKey]!.add("${_getTimestamp()} - $sender: $body");
 
+            // CHECK: Is this specific chat currently open and visible?
             bool isChatVisible = _isOpen && _activeChatId == chatKey;
             
+            // If NOT visible, increment the unread count for this specific ID
             if (!isChatVisible) {
               _unreadCounts[chatKey] = (_unreadCounts[chatKey] ?? 0) + 1;
             }
@@ -94,6 +112,7 @@ class _ChatOverlayState extends State<ChatOverlay> {
       },
     );
 
+    // Presence Logic
     _xmpp.presenceStream.listen((event) {
       if (!mounted) return;
       String from = event['from']!; 
@@ -129,6 +148,7 @@ class _ChatOverlayState extends State<ChatOverlay> {
     }
   }
 
+  // Opens a specific chat and clears its badge
   void _openChat(String id, bool isGroup) {
     setState(() {
       _isOpen = true;
@@ -136,7 +156,8 @@ class _ChatOverlayState extends State<ChatOverlay> {
       _isGroupMode = isGroup;
       _history[id] = _history[id] ?? [];
       
-      _unreadCounts[id] = 0; // Clear specific unread count
+      // CLEAR UNREAD COUNT FOR THIS ITEM
+      _unreadCounts[id] = 0;
     });
     if (isGroup) _xmpp.joinRoom(id, widget.currentUser);
   }
@@ -144,6 +165,7 @@ class _ChatOverlayState extends State<ChatOverlay> {
   void _toggleChat() {
     setState(() {
       _isOpen = !_isOpen;
+      // Refresh inbox when opening main window
       if (_isOpen) _loadInbox();     
     });
   }
@@ -151,14 +173,18 @@ class _ChatOverlayState extends State<ChatOverlay> {
   void _send() {
     if (_ctrl.text.isEmpty || _activeChatId == null) return;
     String text = _ctrl.text;
+    
     _xmpp.sendMessage(_activeChatId!, text, isGroup: _isGroupMode);
+    
     setState(() {
       if (!_history.containsKey(_activeChatId!)) _history[_activeChatId!] = [];
-      _history[_activeChatId!]!.add("Me: $text");
+      // Add to history with Timestamp and "Me"
+      _history[_activeChatId!]!.add("${_getTimestamp()} - Me: $text");
       _ctrl.clear();
     });
   }
 
+  // Helper Widget for Badges
   Widget _buildBadge(int count) {
     if (count == 0) return SizedBox.shrink();
     return Container(
@@ -177,6 +203,7 @@ class _ChatOverlayState extends State<ChatOverlay> {
   Widget _buildInbox() {
     return Column(
       children: [
+        // Header
         Container(
           padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           color: Colors.blue[50],
@@ -184,6 +211,7 @@ class _ChatOverlayState extends State<ChatOverlay> {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Text("Chats", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.blue[900])),
+              // Close/Minimize Button
               IconButton(
                 icon: Icon(Icons.close, size: 22, color: Colors.blue[800]),
                 onPressed: _toggleChat, 
@@ -193,6 +221,7 @@ class _ChatOverlayState extends State<ChatOverlay> {
             ],
           ),
         ),
+        // List
         Expanded(
           child: _isLoadingInbox 
             ? Center(child: CircularProgressIndicator())
@@ -217,22 +246,19 @@ class _ChatOverlayState extends State<ChatOverlay> {
                           leading: Icon(Icons.confirmation_number, size: 20, color: Colors.blue),
                           title: Text(r, style: TextStyle(fontWeight: count > 0 ? FontWeight.bold : FontWeight.normal)),
                           
-                          // --- FIX STARTS HERE ---
-                          // Explicitly size the trailing widget slot
-                          trailing: SizedBox( 
-                            width: 32.0, // Give it a fixed width (e.g., enough for badge or icon)
-                            child: Align( // Align the content within the fixed width
+                          // FIX: Explicitly size trailing to prevent layout errors
+                          trailing: SizedBox(
+                            width: 32.0,
+                            child: Align(
                               alignment: Alignment.centerRight,
                               child: count > 0 
-                                  ? _buildBadge(count) 
-                                  : Icon(Icons.chevron_right, size: 16, color: Colors.grey[300]),
+                                ? _buildBadge(count) 
+                                : Icon(Icons.chevron_right, size: 16, color: Colors.grey[300]),
                             ),
                           ),
-                          // --- FIX ENDS HERE ---
-                          
                           onTap: () => _openChat(r, true),
                         );
-                      }).toList(), // Add .toList() here
+                      }).toList(),
                     ],
 
                     if (_myColleagues.isNotEmpty) ...[
@@ -250,28 +276,25 @@ class _ChatOverlayState extends State<ChatOverlay> {
                           leading: Icon(Icons.person, size: 20, color: Colors.green),
                           title: Text(u, style: TextStyle(fontWeight: count > 0 ? FontWeight.bold : FontWeight.normal)),
                           
-                          // --- FIX STARTS HERE ---
-                          // Explicitly size the trailing widget slot
+                          // FIX: Explicitly size trailing
                           trailing: SizedBox(
-                            width: 32.0, // Fixed width
-                            child: Align( // Align the content within
+                            width: 32.0,
+                            child: Align(
                               alignment: Alignment.centerRight,
                               child: count > 0 
-                                  ? _buildBadge(count)
-                                  : Container(
-                                      width: 8, height: 8,
-                                      decoration: BoxDecoration(
-                                        color: isOnline ? Colors.green : Colors.grey[300],
-                                        shape: BoxShape.circle
-                                      ),
+                                ? _buildBadge(count)
+                                : Container(
+                                    width: 8, height: 8,
+                                    decoration: BoxDecoration(
+                                      color: isOnline ? Colors.green : Colors.grey[300],
+                                      shape: BoxShape.circle
                                     ),
+                                  ),
                             ),
                           ),
-                          // --- FIX ENDS HERE ---
-                          
                           onTap: () => _openChat(u, false),
                         );
-                      }).toList(), // Add .toList() here
+                      }).toList(),
                     ],
                   ],
                 ),
@@ -284,6 +307,7 @@ class _ChatOverlayState extends State<ChatOverlay> {
   Widget _buildChat() {
     return Column(
       children: [
+        // Header
         Container(
           padding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
           color: Colors.blue[800], 
@@ -293,7 +317,7 @@ class _ChatOverlayState extends State<ChatOverlay> {
                 icon: Icon(Icons.arrow_back, color: Colors.white, size: 20),
                 onPressed: () => setState(() {
                   _activeChatId = null; 
-                  _loadInbox(); 
+                  _loadInbox(); // Refresh inbox list logic
                 }),
                 padding: EdgeInsets.zero,
                 constraints: BoxConstraints(),
@@ -321,6 +345,8 @@ class _ChatOverlayState extends State<ChatOverlay> {
             ],
           ),
         ),
+        
+        // Messages
         Expanded(
           child: Container(
             color: Colors.grey[100],
@@ -329,9 +355,23 @@ class _ChatOverlayState extends State<ChatOverlay> {
               itemCount: (_history[_activeChatId!] ?? []).length,
               itemBuilder: (ctx, i) {
                 String msg = _history[_activeChatId!]![i];
-                bool isMe = msg.startsWith("Me:");
-                String displayMsg = msg.contains(":") ? msg.substring(msg.indexOf(":") + 1).trim() : msg;
-                String senderName = msg.contains(":") ? msg.split(":")[0] : "Anon";
+                
+                // Parsing logic for "Timestamp - Sender: Body"
+                // Example: "05/01/2026 - 12:00 - Me: Hello World"
+                
+                int splitIndex = msg.indexOf(": ");
+                String headerInfo; 
+                String displayMsg;
+
+                if (splitIndex != -1) {
+                  headerInfo = msg.substring(0, splitIndex); 
+                  displayMsg = msg.substring(splitIndex + 2).trim(); 
+                } else {
+                  headerInfo = "Unknown";
+                  displayMsg = msg;
+                }
+
+                bool isMe = headerInfo.endsWith(" - Me");
 
                 return Align(
                   alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
@@ -353,8 +393,13 @@ class _ChatOverlayState extends State<ChatOverlay> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        if (!isMe) 
-                          Text(senderName, style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.grey[600])),
+                        // Header (Time + Sender)
+                        Text(
+                          headerInfo, 
+                          style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.grey[600])
+                        ),
+                        SizedBox(height: 2),
+                        // Body
                         Text(displayMsg, style: TextStyle(fontSize: 13)),
                       ],
                     ),
@@ -364,6 +409,8 @@ class _ChatOverlayState extends State<ChatOverlay> {
             ),
           ),
         ),
+        
+        // Input
         Container(
           decoration: BoxDecoration(
             color: Colors.white,
@@ -409,6 +456,7 @@ class _ChatOverlayState extends State<ChatOverlay> {
       children: [
         widget.child,
 
+        // CHAT WINDOW (Open)
         if (_isOpen)
           Positioned(
             bottom: 20, 
@@ -426,6 +474,7 @@ class _ChatOverlayState extends State<ChatOverlay> {
             ),
           ),
 
+        // FAB ICON (Closed)
         if (!_isOpen)
           Positioned(
             bottom: 20,
@@ -438,6 +487,7 @@ class _ChatOverlayState extends State<ChatOverlay> {
                 children: [
                   Icon(Icons.chat),
                   
+                  // GLOBAL UNREAD BADGE
                   if (_totalGlobalUnread > 0)
                     Positioned(
                       right: -4,
