@@ -34,10 +34,7 @@ class _ChatOverlayState extends State<ChatOverlay> {
   List<String> _myColleagues = [];
   bool _isLoadingInbox = true;
 
-  // --- NEW: Unread Map (The Single Source of Truth) ---
   final Map<String, int> _unreadCounts = {}; 
-
-  // LOGIC 1: GLOBAL COUNT (Sum of all rooms) -> Used for the FAB Badge
   int get _totalGlobalUnread => _unreadCounts.values.fold(0, (sum, count) => sum + count);
 
   // --- Chat Data ---
@@ -58,13 +55,11 @@ class _ChatOverlayState extends State<ChatOverlay> {
         String chatKey = from.split('@')[0];
         String sender;
 
-        // 1. System Signals (Don't increment badge, just refresh list)
         if (type == 'headline') {
           if (body == 'REFRESH_INBOX') _loadInbox();
           return; 
         } 
         
-        // 2. Parse Sender
         if (type == 'groupchat') {
            chatKey = from.split('@')[0];
            sender = from.contains('/') ? from.split('/')[1] : "System";
@@ -73,7 +68,6 @@ class _ChatOverlayState extends State<ChatOverlay> {
            sender = chatKey; 
         }
 
-        // 3. Desktop Notification
         if (html.document.visibilityState == 'hidden') {
            if (html.Notification.permission == 'granted') {
               var n = html.Notification("Msg from $sender", body: body);
@@ -85,27 +79,21 @@ class _ChatOverlayState extends State<ChatOverlay> {
            }
         }
 
-        // 4. UPDATE STATE
         if (mounted) {
           setState(() {
-            // Add to history
             if (!_history.containsKey(chatKey)) _history[chatKey] = [];
             _history[chatKey]!.add("$sender: $body");
 
-            // CHECK: Is this specific chat currently open and visible?
             bool isChatVisible = _isOpen && _activeChatId == chatKey;
             
-            // If NOT visible, increment the unread count for this specific ID
             if (!isChatVisible) {
               _unreadCounts[chatKey] = (_unreadCounts[chatKey] ?? 0) + 1;
-              // Because we called setState, the _totalGlobalUnread getter updates automatically
             }
           });
         }
       },
     );
 
-    // Presence Logic
     _xmpp.presenceStream.listen((event) {
       if (!mounted) return;
       String from = event['from']!; 
@@ -141,7 +129,6 @@ class _ChatOverlayState extends State<ChatOverlay> {
     }
   }
 
-  // Opens a specific chat and clears its badge
   void _openChat(String id, bool isGroup) {
     setState(() {
       _isOpen = true;
@@ -149,8 +136,7 @@ class _ChatOverlayState extends State<ChatOverlay> {
       _isGroupMode = isGroup;
       _history[id] = _history[id] ?? [];
       
-      // CLEAR UNREAD COUNT FOR THIS ITEM
-      _unreadCounts[id] = 0;
+      _unreadCounts[id] = 0; // Clear specific unread count
     });
     if (isGroup) _xmpp.joinRoom(id, widget.currentUser);
   }
@@ -158,8 +144,6 @@ class _ChatOverlayState extends State<ChatOverlay> {
   void _toggleChat() {
     setState(() {
       _isOpen = !_isOpen;
-      // Note: We do NOT clear global counts here. 
-      // We only clear counts when entering a specific chat via _openChat.
       if (_isOpen) _loadInbox();     
     });
   }
@@ -175,7 +159,6 @@ class _ChatOverlayState extends State<ChatOverlay> {
     });
   }
 
-  // Helper Widget for Badges
   Widget _buildBadge(int count) {
     if (count == 0) return SizedBox.shrink();
     return Container(
@@ -194,7 +177,6 @@ class _ChatOverlayState extends State<ChatOverlay> {
   Widget _buildInbox() {
     return Column(
       children: [
-        // Header
         Container(
           padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           color: Colors.blue[50],
@@ -211,7 +193,6 @@ class _ChatOverlayState extends State<ChatOverlay> {
             ],
           ),
         ),
-        // List
         Expanded(
           child: _isLoadingInbox 
             ? Center(child: CircularProgressIndicator())
@@ -229,19 +210,29 @@ class _ChatOverlayState extends State<ChatOverlay> {
                         child: Text("MY TICKETS", style: TextStyle(color: Colors.grey, fontSize: 11, fontWeight: FontWeight.bold)),
                       ),
                       ..._myRooms.map((r) {
-                        // LOGIC 2: INDIVIDUAL COUNT -> Used for List Row Badge
                         int count = _unreadCounts[r] ?? 0;
                         
                         return ListTile(
                           dense: true,
                           leading: Icon(Icons.confirmation_number, size: 20, color: Colors.blue),
                           title: Text(r, style: TextStyle(fontWeight: count > 0 ? FontWeight.bold : FontWeight.normal)),
-                          trailing: count > 0 
-                              ? _buildBadge(count) 
-                              : Icon(Icons.chevron_right, size: 16, color: Colors.grey[300]),
+                          
+                          // --- FIX STARTS HERE ---
+                          // Explicitly size the trailing widget slot
+                          trailing: SizedBox( 
+                            width: 32.0, // Give it a fixed width (e.g., enough for badge or icon)
+                            child: Align( // Align the content within the fixed width
+                              alignment: Alignment.centerRight,
+                              child: count > 0 
+                                  ? _buildBadge(count) 
+                                  : Icon(Icons.chevron_right, size: 16, color: Colors.grey[300]),
+                            ),
+                          ),
+                          // --- FIX ENDS HERE ---
+                          
                           onTap: () => _openChat(r, true),
                         );
-                      }),
+                      }).toList(), // Add .toList() here
                     ],
 
                     if (_myColleagues.isNotEmpty) ...[
@@ -258,18 +249,29 @@ class _ChatOverlayState extends State<ChatOverlay> {
                           dense: true,
                           leading: Icon(Icons.person, size: 20, color: Colors.green),
                           title: Text(u, style: TextStyle(fontWeight: count > 0 ? FontWeight.bold : FontWeight.normal)),
-                          trailing: count > 0 
-                              ? _buildBadge(count)
-                              : Container(
-                                  width: 8, height: 8,
-                                  decoration: BoxDecoration(
-                                    color: isOnline ? Colors.green : Colors.grey[300],
-                                    shape: BoxShape.circle
-                                  ),
-                                ),
+                          
+                          // --- FIX STARTS HERE ---
+                          // Explicitly size the trailing widget slot
+                          trailing: SizedBox(
+                            width: 32.0, // Fixed width
+                            child: Align( // Align the content within
+                              alignment: Alignment.centerRight,
+                              child: count > 0 
+                                  ? _buildBadge(count)
+                                  : Container(
+                                      width: 8, height: 8,
+                                      decoration: BoxDecoration(
+                                        color: isOnline ? Colors.green : Colors.grey[300],
+                                        shape: BoxShape.circle
+                                      ),
+                                    ),
+                            ),
+                          ),
+                          // --- FIX ENDS HERE ---
+                          
                           onTap: () => _openChat(u, false),
                         );
-                      }),
+                      }).toList(), // Add .toList() here
                     ],
                   ],
                 ),
@@ -407,7 +409,6 @@ class _ChatOverlayState extends State<ChatOverlay> {
       children: [
         widget.child,
 
-        // CHAT WINDOW (Open)
         if (_isOpen)
           Positioned(
             bottom: 20, 
@@ -425,7 +426,6 @@ class _ChatOverlayState extends State<ChatOverlay> {
             ),
           ),
 
-        // FAB ICON (Closed)
         if (!_isOpen)
           Positioned(
             bottom: 20,
@@ -438,7 +438,6 @@ class _ChatOverlayState extends State<ChatOverlay> {
                 children: [
                   Icon(Icons.chat),
                   
-                  // THIS IS THE GLOBAL UNREAD BADGE
                   if (_totalGlobalUnread > 0)
                     Positioned(
                       right: -4,
