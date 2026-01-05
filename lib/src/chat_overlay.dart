@@ -91,6 +91,13 @@ class _ChatOverlayState extends State<ChatOverlay> {
            sender = chatKey; 
         }
 
+        // --- THE FIX: PREVENT DUPLICATES ---
+        // If the message is coming from ME, ignore it 
+        // (because _send() already added it to the UI locally)
+        if (sender == widget.currentUser) {
+          return; 
+        }
+
         if (html.document.visibilityState == 'hidden') {
            if (html.Notification.permission == 'granted') {
               var n = html.Notification("Msg from $sender", body: body);
