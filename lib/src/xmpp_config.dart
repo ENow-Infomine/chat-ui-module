@@ -7,6 +7,7 @@ class XmppConfig {
   String wsUrl = "wss://srv1138210.hstgr.cloud/ws";
   String domain = "srv1138210.hstgr.cloud";
   String restApiUrl = "https://srv1138210.hstgr.cloud/api/chat"; 
+  String chatUsrPwd = "password";
 
   // 2. Make parameters optional (nullable)
   void init({
