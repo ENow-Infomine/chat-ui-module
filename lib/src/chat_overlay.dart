@@ -45,6 +45,9 @@ class _ChatOverlayState extends State<ChatOverlay> {
   final Map<String, Set<String>> _presenceMap = {}; 
   final TextEditingController _ctrl = TextEditingController();
 
+    // NEW: Track which rooms we have already joined
+  final Set<String> _joinedRooms = {}; 
+
   // --- Helper: Format Timestamp ---
   String _formatTime(DateTime dt) {
     String _twoDigits(int n) => n.toString().padLeft(2, '0');
@@ -120,8 +123,21 @@ class _ChatOverlayState extends State<ChatOverlay> {
             // Unread Badge Logic
             // Compare lowercase active ID with lowercase chatKey
             bool isChatVisible = _isOpen && _activeChatId?.toLowerCase() == chatKey;
+
+            // Only increment badge if:
+            // 1. Chat is NOT visible
+            // 2. AND the message is somewhat recent (e.g., received in the last 5 minutes) 
+            //    OR it's a live message (timestampStr was null)
             
-            if (!isChatVisible) {
+            bool isRecent = true;
+            if (timestampStr != null) {
+               // If it's history older than 5 mins, treat as "Read"
+               if (DateTime.now().difference(msgTime).inMinutes > 5) {
+                 isRecent = false;
+               }
+            }
+
+            if (!isChatVisible && isRecent) {
               _unreadCounts[chatKey] = (_unreadCounts[chatKey] ?? 0) + 1;
             }
           });
@@ -153,20 +169,36 @@ class _ChatOverlayState extends State<ChatOverlay> {
     _xmpp.connect(widget.currentUser, widget.currentPass);
   }
 
-  Future<void> _loadInbox() async {
+Future<void> _loadInbox() async {
     setState(() => _isLoadingInbox = true);
     final data = await BackendService.getInbox(widget.currentUser);
+    
     if (mounted) {
       setState(() {
         _myRooms = data['rooms']!;
         _myColleagues = data['colleagues']!;
         _isLoadingInbox = false;
       });
+
+      // --- FIX: AUTO-JOIN ROOMS ---
+      // We must join the room to receive "onMessage" events for badges
+      for (String room in _myRooms) {
+        String roomKey = room.toLowerCase();
+        
+        if (!_joinedRooms.contains(roomKey)) {
+          print("Auto-joining room for notifications: $room");
+          
+          // 1. Join XMPP
+          _xmpp.joinRoom(room, widget.currentUser);
+          
+          // 2. Mark as joined so we don't do it again
+          _joinedRooms.add(roomKey);
+        }
+      }
     }
   }
 
-  void _openChat(String id, bool isGroup) {
-    // Normalize ID to lowercase for history/badge lookups
+void _openChat(String id, bool isGroup) {
     String normalizedId = id.toLowerCase();
     
     setState(() {
@@ -175,12 +207,15 @@ class _ChatOverlayState extends State<ChatOverlay> {
       _isGroupMode = isGroup;
       _history[normalizedId] = _history[normalizedId] ?? [];
       
-      // Clear badge for this specific chat
+      // Clear badge
       _unreadCounts[normalizedId] = 0;
     });
     
-    // Join room (XMPP handles case, but usually lowercase)
-    if (isGroup) _xmpp.joinRoom(id, widget.currentUser);
+    // Join if not already joined (Double check)
+    if (isGroup && !_joinedRooms.contains(normalizedId)) {
+       _xmpp.joinRoom(id, widget.currentUser);
+       _joinedRooms.add(normalizedId);
+    }
   }
 
   void _toggleChat() {
