@@ -364,20 +364,23 @@ class _ChatOverlayState extends State<ChatOverlay> {
     );
   }
 
-  Widget _buildChat() {
+Widget _buildChat() {
+    // Safety check for null ID
+    List<String> currentMsgs = _history[_activeChatId!] ?? [];
+
     return Column(
       children: [
-        // Header
+        // 1. Header
         Container(
           padding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-          color: Colors.blue[800], 
+          color: Colors.blue[800],
           child: Row(
             children: [
               IconButton(
                 icon: Icon(Icons.arrow_back, color: Colors.white, size: 20),
                 onPressed: () => setState(() {
-                  _activeChatId = null; 
-                  _loadInbox(); 
+                  _activeChatId = null;
+                  _loadInbox();
                 }),
                 padding: EdgeInsets.zero,
                 constraints: BoxConstraints(),
@@ -405,23 +408,28 @@ class _ChatOverlayState extends State<ChatOverlay> {
             ],
           ),
         ),
-        
-        // Messages
+
+        // 2. Message List (Newest at Top)
         Expanded(
           child: Container(
             color: Colors.grey[100],
             child: ListView.builder(
               padding: EdgeInsets.all(12),
-              itemCount: (_history[_activeChatId!] ?? []).length,
+              itemCount: currentMsgs.length,
               itemBuilder: (ctx, i) {
-                String msg = _history[_activeChatId!]![i];
+                // --- LOGIC CHANGE FOR NEWEST AT TOP ---
+                // Instead of 'i', we use 'length - 1 - i'
+                // Index 0 (Top of UI) becomes the Last Item (Newest)
+                String msg = currentMsgs[currentMsgs.length - 1 - i];
+                // --------------------------------------
+
                 int splitIndex = msg.indexOf(": ");
-                String headerInfo; 
+                String headerInfo;
                 String displayMsg;
 
                 if (splitIndex != -1) {
-                  headerInfo = msg.substring(0, splitIndex); 
-                  displayMsg = msg.substring(splitIndex + 2).trim(); 
+                  headerInfo = msg.substring(0, splitIndex);
+                  displayMsg = msg.substring(splitIndex + 2).trim();
                 } else {
                   headerInfo = "Unknown";
                   displayMsg = msg;
@@ -450,7 +458,7 @@ class _ChatOverlayState extends State<ChatOverlay> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          headerInfo, 
+                          headerInfo,
                           style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.grey[600])
                         ),
                         SizedBox(height: 2),
@@ -463,8 +471,8 @@ class _ChatOverlayState extends State<ChatOverlay> {
             ),
           ),
         ),
-        
-        // Input
+
+        // 3. Input Area
         Container(
           decoration: BoxDecoration(
             color: Colors.white,
@@ -480,7 +488,10 @@ class _ChatOverlayState extends State<ChatOverlay> {
                   decoration: InputDecoration(
                     hintText: "Type a message...",
                     contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(20), borderSide: BorderSide(color: Colors.grey[300]!)),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(20),
+                      borderSide: BorderSide(color: Colors.grey[300]!)
+                    ),
                     isDense: true,
                     fillColor: Colors.grey[50],
                     filled: true,
